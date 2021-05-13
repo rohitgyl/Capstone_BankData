@@ -1,0 +1,556 @@
+---
+title: "Banking Transaction Prediction - Capstone Project"
+author: "Rohit Goyal"
+date: "01/05/2021"
+output: pdf_document
+---
+
+# 1. Introduction
+
+## 1.1 Objective 
+The objective of this project is to develop a model that will predict whether a given customer of a bank will make a specific type of transaction in future. Such models are used by banks to identify relevant products for their customers and make targeted recommendations to them through their various advertising and outreach channels. 
+
+## 1.2 Dataset Used 
+
+The **Santander Customer Transaction Prediction** dataset which is available on **kaggle.com** (*https://www.kaggle.com/c/santander-customer-transaction-prediction/data*) will be used to build the prediction model using machine learning. The dataset contains 200,000 anonymized transaction records with 200 numeric feature variables and a target variable which is 0 or 1, denoting whether the trasanction is made or not. This data was made available by Santander bank as part of a competition on Kaggle. 
+
+## 1.3 Summary of Steps
+
+* Prepare the the transaction data set for analysis
+* Split the dataset into 2 parts - training set (to build the predicition model) and validation set (to check the performance of model)
+* Explore the dataset to identify trends 
+* Evaluate different prediction models using training data and select final model 
+* Assess performance of the final model on the validation dataset
+
+# 2. Detailed Analysis of Steps 
+
+## 2.1 Data Preparation
+
+```{r setup, include=FALSE}
+######################################################################
+# Important Note:
+# This code is written using R v 4.0 on Mac
+# The code can take upto 2 hours to run due to the time taken by the model training steps.
+# The code in this R markdown is same as that in provided R code file. 
+######################################################################
+
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(out.width = "70%")
+knitr::opts_chunk$set(out.height  = "70%")
+
+# Install the required packages
+if(!require(tidyverse)) install.packages("tidyverse", repos = "http://cran.us.r-project.org")
+if(!require(caret)) install.packages("caret", repos = "http://cran.us.r-project.org")
+if(!require(data.table)) install.packages("data.table", repos = "http://cran.us.r-project.org")
+if(!require(dplyr)) install.packages("dplyr")
+if(!require(ggplot2)) install.packages("ggplot2")
+if(!require(stringr)) install.packages("stringr")
+if(!require(readr)) install.packages("readr")
+if(!require(tidyr)) install.packages("tidyr")
+if(!require(lubridate)) install.packages("lubridate")
+if(!require(tidyr)) install.packages("tidyr")
+if(!require(knitr)) install.packages("knitr")
+if(!require(kableExtra)) install.packages("kableExtra")
+if(!require(matrixStats)) install.packages("matrixStats")
+if(!require(rpart)) install.packages("rpart")
+
+# load libraries
+library(tidyverse)
+library(caret)
+library(data.table)
+library(dplyr)
+library(ggplot2)
+library(stringr)
+library(readr)
+library(tidyr)
+library(lubridate)
+library(knitr)
+library(matrixStats)
+library(rpart)
+```
+
+* The first step is to download the data set. For this project, the dataset was downloaded in advance from Kaggle website (which requires registration and login to access the data). The original data file was ~300 mb in size so it was split into 10 chunks and uploaded on github in rda format. As a first step to begin the analysis, the data files are downloaded from github. 
+
+* The individual data files are then combined to create the full dataset. Target variable is transformed from 0/1 to no/yes.
+
+```{r Data-Download,echo=FALSE,message=FALSE,warning=FALSE}
+
+############################################################################################################
+# Data download from github. 
+# The files have been stored as rda files split due to file size restriction
+############################################################################################################
+
+# Load the data which is split and stored as 10 rda files on git hub
+for(i in 1:10){
+  dl <- tempfile()
+  download.file(paste("https://github.com/rohitgyl/Capstone_BankData/raw/main/train_data",i,".rda",sep=""), dl)
+  load(dl)
+  }
+
+# combine the  data
+full_data_set <- rbind(train_data1,train_data2,train_data3,train_data4,
+                    train_data5,train_data6,train_data7,train_data8,train_data9,train_data10)
+
+# remove sub data sets from memory
+rm(train_data1,train_data2,train_data3,train_data4,
+      train_data5,train_data6,train_data7,train_data8,train_data9,train_data10)
+
+
+# get target variable which is second col in file
+y <- full_data_set[,2]
+
+# get remaining variables on which target depends
+x <- full_data_set[,3:202]
+
+# convert to matrix 
+x_m <- as.matrix(x)
+
+# convert target var from 0/1 to no/yes
+y_factor <- y%>% mutate(target =ifelse(target=="1","yes","no")) %>% mutate(target = factor(target))
+
+```
+
+* This dataset is then split into 2 parts.
+
+1. 80% as training set (to build the model). 
+2. Remaining 20% as validation set (to test our final model). The proportion of customers who make a transaction is expected to be much less than the those who dont. So 20% of data is kept aside instead of the typical 10% to ensure that the final model gets a chance to be evaluated on sufficient positive cases. 
+
+```{r Dataset-Prep, echo=FALSE,message=FALSE,warning=FALSE}
+##########################################################
+# Create edx set (which will be used for model building)
+# validation set (final hold-out test set)
+# 
+##########################################################
+
+set.seed(1, sample.kind = "Rounding")    # if using R 3.6 or later
+
+test_index <- createDataPartition(y = y_factor$target, times = 1, p = 0.2, list = FALSE)
+edx_y <- y_factor[-test_index,]
+edx_x <- x_m[-test_index,]
+
+validation_y <- y_factor[test_index,]
+validation_x <- x_m[test_index,]
+
+# remove unwanted variables from memory
+rm(y_factor,x_m,x,y,full_data_set)
+```
+* Given that there are 200 variables (features), next it is checked whether any of the variables can be discarded if they are not informative. A check is done to see if any variables have **near zero variance**. No variables satisfy this criterion. Lowest 5 values are shown below.
+
+```{r Variance-Check, echo=FALSE,message=FALSE,warning=FALSE}
+############################################################################################################
+# Data preparation and transfomration
+############################################################################################################
+
+# get column std deviations 
+sds <- colSds(edx_x)
+
+# check if any variables can be dropped due to near zero variance--> no such cases found
+nzv <- nearZeroVar(edx_x)
+
+# print nzv length
+length(nzv)%>% kable(col.names = "Variables with near zero var","simple")
+
+
+# check lowest 5 
+as.data.frame(sds) %>% arrange(sds) %>% slice (1:5) %>% kable(col.names = "Lowest 5 Std Devs","simple")
+
+# standardize the variables 
+x_centered <- sweep(edx_x, 2, colMeans(edx_x))
+x_scaled <- sweep(x_centered, 2, colSds(edx_x), FUN = "/")
+
+rm(x_centered)
+
+
+```
+* The variables are then standardized using matrix operations by subtracting mean and dividing by std deviation. 
+
+
+## 2.2 Data Exploration and Visualization
+
+* The data is now ready for initial exploration. Here is a snippet of the prepared data. Only the first 3 and last 2 feature variables are shown. 
+
+```{r Sample-Data, echo=FALSE}
+# Check sample data to inspect data attributes. only showing first 3 and last 2 attributes.
+head(cbind(edx_y,x_scaled[,1:3],x_scaled[,199:200]) ) %>% knitr::kable("simple")
+```
+
+* The dimensions of training dataset (rows, columns) including target variable  are as follows:
+
+```{r Data-Dimensions, echo=FALSE}
+# dimension of dataset
+dim(cbind(edx_y,x_scaled)) %>% knitr::kable(col.names = "Dimensions: rows, columns","simple")
+```
+
+* The proportion of yes/no for the target variable is checked and is as follows. This shows that class imbalance is present and may need to be factored during model development. 
+
+```{r Class-Proportion, echo=FALSE,message=FALSE,warning=FALSE}
+########################################################################################
+# check proportion of yes/no cases -- 10% are yes cases i.e class imbalance is present
+# i.e. overall accuracy not enough - check balanced score and sensitivity
+########################################################################################
+table(edx_y) %>% knitr::kable(col.names = c("Class","Count"),"simple")
+```
+
+* **Principal component analysis (PCA)** is performed to see if we can transform our 200 feature variables and work with a smaller set by taking the most important variables without significant information loss. Looking at the cumulative variable importance from the PCA output, it is observed that the top most components are not providing any significant information. Therefore, it will not be possible to reduce our number of variables through PCA. For instance, even if we take upto PC100, we only get cumulative importance value of 0.51546.
+
+```{r PCA, echo=FALSE,message=FALSE,warning=FALSE}
+#########################################################################
+# perform principal component analysis to see we can keep transform the 200 variables and work with a smaller set
+# for our analysis without loosing much information
+#########################################################################
+
+pca <- prcomp(x_scaled)
+pca_summary <- summary(pca) 
+
+importance <- as.matrix(pca_summary$importance)
+
+# review cumulative importance of pca components. conclude to keep all variables
+importance[3,]
+
+rm(pca)
+
+```
+
+* **Box plots** are created for all our 200 feature variables to analyse the variability by target variable. It is noted that the feature ranges overlap a lot for both target values. There are no features which stand out as significant differentiators.
+
+```{r Var-Trends1, echo=FALSE,message=FALSE,warning=FALSE}
+
+
+########################################################################################
+# check trends of each variable for target yes/no by creating box plots
+# as we have 200 variables, will split into 5 graphs with 40 per graph
+########################################################################################
+
+# combine x and y for plotting
+tmp <- cbind(x_scaled,edx_y) 
+
+# graph for var_0-var_40
+tmp %>% select (var_0,var_1,var_2,var_3,var_4,var_5,var_6,var_7,var_8,var_9,var_10,
+                var_11,var_12,var_13,var_14,var_15,var_16,var_17,var_18,var_19,var_20,
+                var_21,var_22,var_23,var_24,var_25,var_26,var_27,var_28,var_29,var_30,
+                var_31,var_32,var_33,var_34,var_35,var_36,var_37,var_38,var_39,var_40,
+                target)%>%
+  gather(key = "var", value = "value", -target) %>%
+  ggplot(aes(var,value,fill=target))+
+  geom_boxplot()+
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))+
+  ggtitle("Box plot by target for Var0-Var40")
+```
+
+
+```{r Var-Trends2, echo=FALSE,message=FALSE,warning=FALSE}
+
+
+# graph for var_41-var_80
+tmp %>% select (
+                var_41,var_42,var_43,var_44,var_45,var_46,var_47,var_48,var_49,var_50,
+                var_51,var_52,var_53,var_54,var_55,var_56,var_57,var_58,var_59,var_60,
+                 var_61,var_62,var_63,var_64,var_65,var_66,var_67,var_68,var_69,var_70,
+                 var_71,var_72,var_73,var_74,var_75,var_76,var_77,var_78,var_79,var_80,
+                target)%>%
+  gather(key = "var", value = "value", -target) %>%
+  ggplot(aes(var,value,fill=target))+
+  geom_boxplot()+
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))+
+  ggtitle("Box plot by target for Var41-Var80")
+```
+
+
+
+```{r Var-Trends3, echo=FALSE,message=FALSE,warning=FALSE}
+
+# graph for var_81-var_120
+tmp %>% select (
+    var_81,var_82,var_83,var_84,var_85,var_86,var_87,var_88,var_89,var_90,
+  var_91,var_92,var_93,var_94,var_95,var_96,var_97,var_98,var_99,var_100,
+  var_101,var_102,var_103,var_104,var_105,var_106,var_107,var_108,var_109,var_110,
+   var_111,var_112,var_113,var_114,var_115,var_116,var_117,var_118,var_119,var_120,
+  target)%>%
+  gather(key = "var", value = "value", -target) %>%
+  ggplot(aes(var,value,fill=target))+
+  geom_boxplot()+
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))+
+  ggtitle("Box plot by target for Var81-Var120")
+```
+
+
+```{r Var-Trends4, echo=FALSE,message=FALSE,warning=FALSE}
+
+# graph for var_121-var_160
+tmp %>% select (
+   var_121,var_122,var_123,var_124,var_125,var_126,var_127,var_128,var_129,var_130,
+   var_131,var_132,var_133,var_134,var_135,var_136,var_137,var_138,var_139,var_140,
+   var_141,var_142,var_143,var_144,var_145,var_146,var_147,var_148,var_149,var_150,
+   var_151,var_152,var_153,var_154,var_155,var_156,var_157,var_158,var_159,var_160,
+  target)%>%
+  gather(key = "var", value = "value", -target) %>%
+  ggplot(aes(var,value,fill=target))+
+  geom_boxplot()+
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))+
+  ggtitle("Box plot by target for Var121-Var160")
+```
+
+
+```{r Var-Trends5, echo=FALSE,message=FALSE,warning=FALSE}
+# graph for var_161-var_199
+tmp %>% select (
+   var_161,var_162,var_163,var_164,var_165,var_166,var_167,var_168,var_169,var_170,
+   var_171,var_172,var_173,var_174,var_175,var_176,var_177,var_178,var_179,var_180,
+  var_181,var_182,var_183,var_184,var_185,var_186,var_187,var_188,var_189,var_190,
+  var_191,var_192,var_193,var_194,var_195,var_196,var_197,var_198,var_199,
+  target)%>%
+  gather(key = "var", value = "value", -target) %>%
+  ggplot(aes(var,value,fill=target))+
+  geom_boxplot()+
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))+
+  ggtitle("Box plot by target for Var161-Var199")
+
+  
+```
+
+## 2.3 Model Development 
+
+* The training set is first further split into training and test data sets for model development. 
+* For model comparison, 3 metrics will be captured - Overall Accuracy, Sensitivity and Precision. Given the low pervalance of our positive target class (i.e prediction that customer will do the transaction), Sensitivity is of primary importance. 
+* Cross validation will be used for training all models.
+* Different types of classification algorithms will be tried to see which give the best results. 
+
+```{r Model-Split-Data, echo=FALSE,message=FALSE,warning=FALSE}
+# set seed for consistent results
+set.seed(1, sample.kind = "Rounding")    # if using R 3.6 or later
+
+# split edx data set further into 20% for test and 80% for training
+test_index <- createDataPartition(edx_y$target, times = 1, p = 0.2, list = FALSE)
+test_x <- x_scaled[test_index,]
+test_y <- edx_y[test_index,]
+train_x <- x_scaled[-test_index,]
+train_y <- edx_y[-test_index,]
+
+# set train control for cross validation
+ctrl <- trainControl(method="cv", number = 10)
+
+
+```
+
+* **Model 1 - Rpart** - The first model chosen is Rpart as we have a classification problem with large number of features. Rpart algorithm is used with tuning parameter of cp. It achieves an overall accuracy of near 90% however, fails to pickup any of the target = yes cases. This is the reason why Sensitivity is zero and Precision is NA. 
+
+```{r Model-1, echo=FALSE,message=FALSE,warning=FALSE}
+####################################################################################
+# Model 1 - Rpart
+####################################################################################
+
+# set seed for consistent results
+set.seed(1, sample.kind = "Rounding") 
+
+# train using rpart
+train_rpart <- train(train_x, train_y$target, 
+                     method = "rpart",
+                     tuneGrid = data.frame(cp = seq(0, 0.05, len = 5)),
+                     trControl = ctrl)
+
+# plot to check if optimal cp found
+ggplot(train_rpart)
+
+# get predictions on test set
+rpart_preds <- predict(train_rpart, as.data.frame(test_x))
+
+# rpart accuracy,  sensitivity, precision
+rpart_acc <- confusionMatrix(rpart_preds, test_y$target, positive ="yes")$overall["Accuracy"]  
+rpart_sens <- sensitivity(rpart_preds, test_y$target, positive ="yes")
+rpart_prec <- precision(rpart_preds, test_y$target, relevant ="yes")
+
+# Add rpart results to the table
+rm(rmse_results)
+results <- data_frame(method = "Rpart", Accuracy =rpart_acc , Sensitivity=rpart_sens, Precision = rpart_prec)
+
+results%>%  knitr::kable(col.names = c("Model","Accuracy","Sensitivity","Precision"),"simple")
+
+```
+
+* **Model 2 - glm** - For this model, the  logistic regression is used. A Sensitivity of 0.2702114 and Precision of 0.6805012 is observed. This is an improvement over Rpart. However, still the Sensitivity is quite low.
+
+```{r Model-2, echo=FALSE,message=FALSE,warning=FALSE}
+####################################################################################
+# Model 2 - glm
+####################################################################################
+
+# set seed for consistent results
+set.seed(1, sample.kind = "Rounding") 
+
+# train using glm
+train_glm <- train(train_x, train_y$target, method = "glm",
+                   trControl = ctrl)
+
+# get predictions on test set
+glm_preds <- predict(train_glm, test_x)
+
+# glm accuracy,  sensitivity, precision
+glm_acc <- confusionMatrix(glm_preds, test_y$target, positive ="yes")$overall["Accuracy"]  
+glm_sens <- sensitivity(glm_preds, test_y$target, positive ="yes")
+glm_prec <- precision(glm_preds, test_y$target, relevant ="yes")
+
+# Add glm results to the table
+results <- bind_rows(results,
+                                          data_frame(method = "glm", Accuracy =glm_acc , Sensitivity=glm_sens,
+                                                     Precision = glm_prec)
+                                           )
+
+results%>%  knitr::kable(col.names = c("Model","Accuracy","Sensitivity","Precision"),"simple")
+
+
+```
+
+* **Model 3 - lda** - Next we try a generative model - Linear Discriminant Analysis (lda). We do not attempt Quadratic discriminant analysis (qda) which would be computationally very intensive due to the large number of features. A Sensitivity of 0.2792289 and Precision of 0.6656783 is observed. The Sensitivity is slightly better than glm but it is at the expense of loss in Precision.
+
+```{r Model-3, echo=FALSE,message=FALSE,warning=FALSE}
+####################################################################################
+# Model 3 - lda
+####################################################################################
+
+# set seed for consistent results
+set.seed(1, sample.kind = "Rounding") 
+
+# Traing using lda model
+train_lda <- train(train_x, train_y$target, method = "lda",
+                   trControl = ctrl)
+
+# get predictions on test set
+lda_preds <- predict(train_lda, test_x)
+
+# lda accuracy,  sensitivity, precision
+lda_acc <- confusionMatrix(lda_preds, test_y$target, positive ="yes")$overall["Accuracy"]  
+lda_sens <- sensitivity(lda_preds, test_y$target, positive ="yes")
+lda_prec <- precision(lda_preds, test_y$target, relevant ="yes")
+
+# Add lda results to the table
+results <- bind_rows(results,
+                                          data_frame(method = "lda", Accuracy =lda_acc , Sensitivity=lda_sens,
+                                                     Precision = lda_prec)
+                                          )
+
+results%>%  knitr::kable(col.names = c("Model","Accuracy","Sensitivity","Precision"),"simple")
+
+```
+
+* Based on the model results thus far, it is observed that the overall accuracy is seen near 90% but the models perform poorly in identifying target=yes cases (as seen with low Sensitivity values). This is likely because of the high prevalance of the target=no cases in our data (as noted during data exploration stage). To cater to this problem, models glm and lda are retrained by **down sampling** the prevalent class (target = no). Rapart is discarded at this stage given that it had zero Sensitivity. 
+
+* **Model 4/5 - With Down Sampling** - The results for glm and lda  with down sampling are presented below along with the earlier model results. There is a significant improvment in Sensitivity (above 70%) with down sampling observed for both models but it comes at the cost of reduction in Precision (below 30%).  There is also a reduction in overall Accuracy from around 90% down to about 78%.
+
+
+
+
+
+```{r Model-4-5, echo=FALSE,message=FALSE,warning=FALSE}
+
+####################################################################################
+# Model 4-5 - Apply down sampling technique for glm, lda
+# # https://www.r-bloggers.com/2016/12/handling-class-imbalance-with-r-and-caret-an-introduction/
+####################################################################################
+ 
+# down sample the prevalent no class and then train glm, lda  models again
+ctrl$sampling <- "down"
+
+# set seed for consistent results
+set.seed(1, sample.kind = "Rounding") 
+
+# Model 4 - glm with down sampling
+train_glm_d <- train(train_x, train_y$target, method = "glm",
+                   trControl = ctrl)
+
+# get predictions on test set
+glm_preds_d <- predict(train_glm_d, test_x)
+
+# glm accuracy,  sensitivity, precision
+glm_acc_d <- confusionMatrix(glm_preds_d, test_y$target, positive ="yes")$overall["Accuracy"]  
+glm_sens_d <- sensitivity(glm_preds_d, test_y$target, positive ="yes")
+glm_prec_d <- precision(glm_preds_d, test_y$target, relevant ="yes")
+
+# Add glm+down sample results to the table
+ results <- bind_rows(results,
+                                          data_frame(method = "glm + down sample", 
+                                                     Accuracy =glm_acc_d , Sensitivity=glm_sens_d,
+                                                     Precision = glm_prec_d)
+                                          )
+ #results%>%  knitr::kable(col.names = c("Model","Accuracy","Sensitivity","Precision"),"simple")
+ 
+# set seed for consistent results
+set.seed(1, sample.kind = "Rounding") 
+
+# Model 5- Train using lda model with down sampling
+train_lda_d <- train(train_x, train_y$target, method = "lda",
+                   trControl = ctrl)
+
+# get predictions on test set
+lda_preds_d <- predict(train_lda_d, test_x)
+
+#  lda accuracy,  sensitivity, precision
+lda_acc_d <- confusionMatrix(lda_preds_d, test_y$target, positive ="yes")$overall["Accuracy"]  
+lda_sens_d <- sensitivity(lda_preds_d, test_y$target, positive ="yes")
+lda_prec_d <- precision(lda_preds_d, test_y$target, relevant ="yes")
+
+# Add lda + downsample results to the table
+results <- bind_rows(results,
+                                          data_frame(method = "lda + down sample", Accuracy =lda_acc_d ,
+                                                     Sensitivity=lda_sens_d,
+                                                     Precision = lda_prec_d)
+)
+
+# output the results with downsampling
+results%>%  knitr::kable(col.names = c("Model","Accuracy","Sensitivity","Precision"),"simple")
+
+
+```
+
+* **Final Model Selection** - Selection is made of a model with Down sampling because it gives much better Sensitivity. Therefore, **glm with down sampling**  is selected as the final model because it gives the highest Sensitivity of 0.7754975. While it has a low Precision (high proportion of False Positives), this is an acceptable trade off to allow the bank to identify almost 80% of customers who are likely to do a transaction (True Positives). Overall Accuracy for the selected model is close to 80% which implies that it also does a decent job with identifying Customers who will not do a transaction (True Negatives) and therefore will not be targeted by sales team. 
+
+
+# 3. Model Performance with Validation Data Set
+
+* The final model performance is now  tested on the Validation data set, i.e the final hold-out set. 
+* As shown below, the Overall Accuracy, Sensitivity, and Precision are close to what we saw for our final model with training data. Infact, we get a higher Sensitivity (0.7937811) as compared to what we saw in training (0.7754975)
+
+```{r Final-Model-Performance-ValidationSet, echo=FALSE,message=FALSE,warning=FALSE}
+
+######################################################################
+# Test final selected model against validation set or the final hold out set
+######################################################################
+
+# standardize the variables 
+v_x_centered <- sweep(validation_x, 2, colMeans(validation_x))
+v_x_scaled <- sweep(v_x_centered, 2, colSds(validation_x), FUN = "/")
+
+# get predictions on test set
+validation_preds <- predict(train_glm_d, v_x_scaled)
+
+validation_acc<- confusionMatrix(validation_preds, validation_y$target, positive ="yes")$overall["Accuracy"]  
+validation_sens <- sensitivity(validation_preds, validation_y$target, positive ="yes")
+validation_prec <- precision(validation_preds, validation_y$target, relevant ="yes")
+
+validation_results <- data_frame(method = "Validation Results - glm + down sample", Accuracy =validation_acc , Sensitivity=validation_sens,
+                                 Precision = validation_prec)
+validation_results%>%  knitr::kable(col.names = c("Model","Accuracy","Sensitivity","Precision"),"simple")
+
+
+```
+
+# 4. Conclusion
+
+* The stated objective of building a customer transaction prediction model is achieved as presented in this report. 
+* The model is built using the Santander Bank dataset available on kaggle.com. 
+* The dataset is explored for any visible trends in its feature variables for the two classes, however no distinct trends are found. Given the large number of feautres in the data, an attempt is made to reduce the dimension through couple of techniques but is concluded to be not feasible. 
+* The following models are evaluated: Rpart, glm and lda. Subsequently all these except Rpart are evaluated with down sampling technique. glm with down sampling is selected as our final model as it gives the best Sensitivity score.
+* The final model is tested on validation dataset and the model performance is consistent with what is observed on training data.
+* Banks are increasingly using data analysis techniques such as those presented in this report to achieve better outcomes for the bank as well as their customers. There is a strong push within the banking community to leverage the troves of transaction information available within their systems to gain useful insights. 
+
+## 4.1 Limitations and future work
+
+* The dataset makes one appreciate the computation capacity constraints faced by data analysts in dealing with large datasets having large number of variables. More computationally intensive algorithms such as Random Forests could be explored. 
+* The dataset is also a good example of real world prediction problems where model building is challenging when data does not provide any any black and white trends. Other models and techniques could be explored which specifically cater to such scenarios.
+* In this project, the down sampling technique is used to handle the class imbalance problem. There are other techniques to handle this which could be evalulated to see if they give better results. 
+
+# 5. References
+
+*https://www.r-bloggers.com/2016/12/handling-class-imbalance-with-r-and-caret-an-introduction/*
+
+
+
